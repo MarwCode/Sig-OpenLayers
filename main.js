@@ -35,6 +35,25 @@ const banjir = new VectorLayer({
   })
 });
 
+const kabRiau = new VectorLayer({
+  background: '#1a2b39',
+  source: new VectorSource({
+    url: 'data/kab_riau.json',
+    format: new GeoJSON(),
+  }),
+  style: {
+    'fill-color': [
+      'interpolate',
+      ['linear'],
+      ['get', 'FID'],
+      1,
+      '#ffff33',
+      13,
+      '#3358ff',
+    ],
+  },
+});
+
 // Untuk menampilkan data hasil survei lapangan
 const survey = new VectorLayer({
   source: new VectorSource({
@@ -51,96 +70,138 @@ const survey = new VectorLayer({
   })
 });
 
-// Popup (harus di atas inisiasi map)
-const container = document.getElementById('popup');
-const content_element = document.getElementById('popup-content');
-const closer = document.getElementById('popup-closer');
-
-const overlay = new Overlay({
-  element: container,
-  autoPan: {
-    animation: {
-      duration: 250,
-    },
-  },
-});
-
-
-// const map = new Map({
-//   target: 'map',
-//   layers: [
-//     new TileLayer({
-//       source: new OSM(),
-//     }),
-//     riau,banjir
-//   ],
-//   overlays: [overlay], // tambah overlay popup
-//   view: new View({
-//     center: fromLonLat([101.438309, 0.510440]),
-//     zoom: 7,
-//   }),
-// });
-
 const map = new Map({
   target: 'map',
   layers: [
     new TileLayer({
       source: new OSM(),
     }),
-    survey
+    kabRiau, banjir, survey
   ],
-  overlays: [overlay], // tambah overlay popup
   view: new View({
-    center: fromLonLat([101.4386, 0.5403]),
-    zoom: 13,
+    center: fromLonLat([101.438309, 0.510440]),
+    zoom: 8,
   }),
 });
 
-// JS for click popup
-// map.on('singleclick', function (evt) {
-//   const feature = map.forEachFeatureAtPixel(evt.pixel, function (feature) {
-//     return feature;
-//   });
-//   if (!feature) {
-//     return;
-//   }
-//   const coordinate = evt.coordinate;
-//   const content = '<h3>Nama Daerah: ' + feature.get('Nama_Pemetaan') +
-//     '</h3>' + '<p>Jumlah Korban: ' + feature.get('Jumlah_Korban') + '</p>';
-//   content_element.innerHTML = content;
-//   overlay.setPosition(coordinate);
-// });
+// Tugas 2: popup (harus di bawah konstanta map)
+const popup = new Overlay({
+  element: document.getElementById('popup'),
+  positioning: 'top-center',
+  stopEvent: false,
+  offset: [0, -15]
+});
+map.addOverlay(popup);
 
 map.on('singleclick', function (evt) {
-  const feature = map.forEachFeatureAtPixel(
+  const hasil = map.forEachFeatureAtPixel(
     evt.pixel,
-    function (feature) { return feature; },
-    { layerFilter: function (layer) { return layer === survey; } }
+    function (feature, layer) { return { feature, layer }; }
   );
-  if (!feature) {
-    return;
+
+  if (hasil) {
+    const feature = hasil.feature;
+    let content = '';
+
+    if (hasil.layer === survey) {
+      // Titik survei: nama + foto
+      const raw = (feature.get('pdfmaps_photos') || '') + (feature.get('description') || '');
+      const match = raw.match(/src="([^"]+)"/);
+      let fotoHtml = '';
+      if (match) {
+        const namaFile = match[1].split(/[\\/]/).pop();
+        fotoHtml = '<img src="foto/' + encodeURI(namaFile) +
+          '" style="width:100%; border-radius:6px; margin-top:8px;">';
+      }
+      content = '<h3>' + feature.get('name') + '</h3>' + fotoHtml;
+    } else if (hasil.layer === banjir) {
+      // Titik banjir
+      content = '<h3>Informasi Fitur</h3>';
+      content += '<p>Nama Daerah: <strong>' + feature.get('Nama_Pemetaan') +
+        '</strong></p>' + '<p>Jumlah Korban: ' + feature.get('Jumlah_Korban') + '</p>';
+    } else {
+      // Polygon kabupaten
+      content = '<h3>' + (feature.get('Kabupaten') || 'Wilayah Riau') + '</h3>';
+    }
+
+    document.getElementById('popup-content').innerHTML = content;
+    popup.setPosition(evt.coordinate);
+  } else {
+    popup.setPosition(undefined);
   }
-
-  const coordinate = evt.coordinate;
-
-  // Ambil nama file foto dari atribut (sesuaikan nama field-nya)
-  const raw = (feature.get('pdfmaps_photos') || '') + (feature.get('description') || '');
-  const match = raw.match(/src="([^"]+)"/);
-  let fotoHtml = '';
-  if (match) {
-    const namaFile = match[1].split(/[\\/]/).pop();
-    fotoHtml = '<img src="foto/' + encodeURI(namaFile) +
-      '" style="width:100%; border-radius:6px; margin-top:8px;">';
-  }
-
-  const content = '<h3>' + feature.get('name') + '</h3>' + fotoHtml;
-  content_element.innerHTML = content;
-  overlay.setPosition(coordinate);
 });
 
-// Click handler to hide popup
-closer.onclick = function () {
-  overlay.setPosition(undefined);
-  closer.blur();
+document.getElementById('popup-closer').onclick = function () {
+  popup.setPosition(undefined);
   return false;
 };
+
+// Tugas 3: highlight polygon saat di-hover
+const featureOverlay = new VectorLayer({
+  source: new VectorSource(),
+  map: map,
+  style: {
+    'stroke-color': 'rgba(255, 255, 255, 0.7)',
+    'stroke-width': 2,
+  },
+});
+
+let highlight;
+
+const highlightFeature = function (pixel) {
+  const feature = map.forEachFeatureAtPixel(pixel, function (feature) {
+    return feature;
+  });
+
+  if (feature !== highlight) {
+    if (highlight) {
+      featureOverlay.getSource().removeFeature(highlight);
+    }
+    if (feature) {
+      featureOverlay.getSource().addFeature(feature);
+    }
+    highlight = feature;
+  }
+};
+
+const displayFeatureInfo = function (pixel) {
+  const feature = map.forEachFeatureAtPixel(pixel, function (feat) {
+    return feat;
+  });
+
+  const info = document.getElementById('info');
+
+  if (feature) {
+    info.innerHTML = feature.get('Kabupaten') || '&nbsp;';
+  } else {
+    info.innerHTML = '&nbsp;';
+  }
+};
+
+// Langkah 7: event pergerakan pointer
+map.on('pointermove', function (evt) {
+  if (evt.dragging) {
+    popup.setPosition(undefined);
+  }
+  const pixel = map.getEventPixel(evt.originalEvent);
+  highlightFeature(pixel);
+  displayFeatureInfo(pixel);
+});
+
+// Langkah 8: kontrol visibilitas layer dengan checkbox
+const polygonLayerCheckbox = document.getElementById('polygon');
+const pointLayerCheckbox = document.getElementById('point');
+
+const surveyLayerCheckbox = document.getElementById('survey');
+
+surveyLayerCheckbox.addEventListener('change', function () {
+  survey.setVisible(surveyLayerCheckbox.checked);
+});
+
+polygonLayerCheckbox.addEventListener('change', function () {
+  kabRiau.setVisible(polygonLayerCheckbox.checked);
+});
+
+pointLayerCheckbox.addEventListener('change', function () {
+  banjir.setVisible(pointLayerCheckbox.checked);
+});
